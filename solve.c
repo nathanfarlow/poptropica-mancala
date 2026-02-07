@@ -8,7 +8,7 @@
 #endif
 
 #define PITS 6
-#define HALF (PITS + 1) /* One side: 6 pits + 1 store */
+#define HALF (PITS + 1) // One side: 6 pits + 1 store
 #define FULL (HALF * 2)
 
 typedef union {
@@ -18,7 +18,7 @@ typedef union {
         uint8_t opp_pit[PITS];
         uint8_t opp_store;
     };
-    uint8_t ring[FULL]; /* Flat view for sowing and flipping */
+    uint8_t ring[FULL]; // Flat view for sowing and flipping
 } Board;
 
 #define START_BOARD {.pit = {3, 3, 3, 3, 3, 3}, .opp_pit = {3, 3, 3, 3, 3, 3}}
@@ -51,11 +51,11 @@ static bool sow(Board *board, int pos) {
     int n = board->pit[pos];
     board->pit[pos] = 0;
     while (n--) {
-        pos = (pos + 1) % (FULL - 1); /* Skip opp's store */
+        pos = (pos + 1) % (FULL - 1); // Skip opp's store
         board->ring[pos]++;
     }
-    if (pos == PITS) return true;             /* Landed in own store */
-    if (pos < PITS && board->pit[pos] == 1) { /* Capture, even if opponent's pit is empty */
+    if (pos == PITS) return true;             // Landed in own store
+    if (pos < PITS && board->pit[pos] == 1) { // Capture, even if opponent's pit is empty
         int opp = PITS - 1 - pos;
         board->store += board->pit[pos] + board->opp_pit[opp];
         board->pit[pos] = board->opp_pit[opp] = 0;
