@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mancala — Poptropica Nabooti Island</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #1a1a20; font-family: 'DM Sans', sans-serif; color: #c8b898; }
+  h1 { font-size: 1rem; font-weight: 500; letter-spacing: 5px; text-transform: uppercase; color: #a09078; margin-bottom: 18px; }
+  canvas { width: min(960px, calc(100vw - 40px)); height: auto; aspect-ratio: 960 / 370; border-radius: 18px; filter: drop-shadow(0 6px 24px rgba(0,0,0,0.5)); cursor: pointer; }
+  #eval-bar-container { margin-top: 14px; width: min(960px, calc(100vw - 40px)); height: 16px; border-radius: 8px; background: #1a1a2e; overflow: hidden; box-shadow: inset 0 2px 6px rgba(0,0,0,0.5); transition: opacity 0.5s ease; }
+  #eval-bar { height: 100%; width: 50%; border-radius: 8px; background: #888; transition: width 0.5s ease, background-color 0.5s ease; }
+  #eval-notification { margin-top: 8px; font-size: 0.95rem; font-weight: 600; min-height: 0; text-align: center; opacity: 0; transition: opacity 0.4s ease; text-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+  #eval-text { margin-top: 6px; font-size: 0.85rem; min-height: 1.4em; color: #c8bda8; font-weight: 400; text-shadow: 0 1px 3px rgba(0,0,0,0.3); text-align: center; transition: opacity 0.5s ease; }
+  .status { margin-top: 10px; font-size: .82rem; color: #a09078; height: 1.2em; }
+  button { padding: 6px 16px; border: 1px solid #4a3a28; border-radius: 6px; background: #2a2420; color: #c8b898; font-family: inherit; font-size: .8rem; cursor: pointer; margin-top: 10px; }
+  button:hover { background: #3a3028; }
+  .subtitle { font-size: 0.78rem; color: #807060; margin-bottom: 4px; text-align: center; line-height: 1.5; }
+  .subtitle:last-of-type { margin-bottom: 16px; color: #6a5c4c; font-style: italic; }
+  .subtitle a { color: #a09078; text-decoration: none; border-bottom: 1px solid #5a4a38; }
+  .subtitle a:hover { color: #c8b898; border-bottom-color: #8a7a68; }
+</style>
+</head>
+<body>
+<h1>Poptropica Mancala</h1>
+<div class="subtitle">
+    Game rules are <a href="https://en.wikipedia.org/wiki/Kalah" target="_blank">standard Kalah(6, 3) rules</a> with empty capture as played on Nabooti Island.
+</div>
+<div class="subtitle">
+  Opponent is a perfect player, which is the same difficulty I remember this game being as a kid. Good luck!
+</div>
+<canvas id="c" width="960" height="370"></canvas>
+<div id="eval-bar-container"><div id="eval-bar"></div></div>
+<div id="eval-notification"></div>
+<div id="eval-text"></div>
+<div class="status" id="status">Loading...</div>
+<button id="newGame" style="display:none">New Game</button>
+<script>
+
+const W = 960, H = 370, PIT_R = 42, SW = 78, SH = 216, SR = 39, TAU = Math.PI * 2;
+const SEED_COLORS = ['#e0c060', '#d4b048', '#c8a040', '#dab858', '#caaa48'];
+const PIT_OFF = [[0,0], [-10,-8], [10,-7], [-7,9], [8,8], [0,-13], [-11,2]];
+const STORE_OFF = [[0,-24], [-7,-6], [6,10], [-4,26], [7,-18], [-8,16], [3,42],
+                   [-6,-40], [8,34], [-3,50], [5,-52], [-8,58], [6,-64], [-4,66]];
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const dpr = devicePixelRatio || 1;
+cv.width = W * dpr; cv.height = H * dpr;
+ctx.scale(dpr, dpr);
+
+function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); }
+function pill(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+const wood = (() => {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const img = c.getContext('2d').createImageData(W, H);
+  const d = img.data;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4;
+    const nx = x / W, ny = y / H;
+    const wx = nx + .12 * Math.sin(ny * 12 + nx * 3) + .05 * Math.sin((ny + .06 * Math.sin(nx * 8 + ny * 5)) * 20 + 1.3);
+    const v = Math.sin(wx * 48) * 6 + Math.sin(wx * 21 + ny * 3.5) * 3.5 + Math.sin(ny * 70) * 1.2;
+    d[i] = 70 + v; d[i+1] = 48 + v * .85; d[i+2] = 28 + v * .6; d[i+3] = 255;
+  }
+  c.getContext('2d').putImageData(img, 0, 0);
+  return c;
+})();
+
+function pitXY(i) { return [175 + i * 118, 251]; }
+function topPitXY(i) { return [175 + (5 - i) * 118, 119]; }
+function storeXY(p) { return p === 0 ? [905, 185] : [55, 185]; }
+function offsetXY(cx, cy, off, n) { const o = off[n % off.length]; return [cx + o[0], cy + o[1]]; }
+
+let wasm, mem, statePtr;
+let flying = [], hoverPit = -1, animating = false, gameOver = false, busy = false;
+
+function readState() {
+  const b = new Uint8Array(mem.buffer, statePtr, 16);
+  return {
+    p0: Array.from(b.slice(0, 6)), p0store: b[6],
+    p1: Array.from(b.slice(7, 13)), p1store: b[13],
+    turn: b[14], score: (b[15] << 24) >> 24
+  };
+}
+
+function cloneState(s) { return {...s, p0: [...s.p0], p1: [...s.p1]}; }
+function isOver(s) { return s.p0.every(x => !x) || s.p1.every(x => !x); }
+
+function sweep(s) {
+  for (let i = 0; i < 6; i++) { s.p0store += s.p0[i]; s.p0[i] = 0; }
+  for (let i = 0; i < 6; i++) { s.p1store += s.p1[i]; s.p1[i] = 0; }
+  return s;
+}
+
+function writeState(s) {
+  const b = new Uint8Array(mem.buffer, statePtr, 17);
+  for (let i = 0; i < 6; i++) b[i] = s.p0[i];
+  b[6] = s.p0store;
+  for (let i = 0; i < 6; i++) b[7 + i] = s.p1[i];
+  b[13] = s.p1store;
+  b[14] = s.turn;
+}
+
+function drawHole(x, y, w, h, r) {
+  if (!r) {
+    circle(x, y, w + 3); ctx.strokeStyle = 'rgba(100,72,38,0.6)'; ctx.lineWidth = 3; ctx.stroke();
+    circle(x, y, w); ctx.strokeStyle = '#1a0e06'; ctx.lineWidth = 2.5; ctx.stroke();
+    circle(x, y, w - 1); ctx.fillStyle = '#2a1c10'; ctx.fill();
+  } else {
+    pill(x - 2, y - 2, w + 4, h + 4, r + 2); ctx.strokeStyle = 'rgba(100,72,38,0.6)'; ctx.lineWidth = 3; ctx.stroke();
+    pill(x, y, w, h, r); ctx.strokeStyle = '#1a0e06'; ctx.lineWidth = 2.5; ctx.stroke();
+    pill(x + 1, y + 1, w - 2, h - 2, r - 1); ctx.fillStyle = '#2a1c10'; ctx.fill();
+  }
+}
+
+function drawSeed(x, y, idx) {
+  const col = SEED_COLORS[idx % 5], r = 7;
+  circle(x + 1, y + 1.5, r); ctx.fillStyle = 'rgba(10,5,0,0.3)'; ctx.fill();
+  const g = ctx.createRadialGradient(x - 1.5, y - 1.5, 0, x, y, r);
+  g.addColorStop(0, '#fff'); g.addColorStop(.35, col); g.addColorStop(1, col);
+  circle(x, y, r); ctx.fillStyle = g; ctx.fill();
+}
+
+function drawSeeds(cx, cy, n, off, base) {
+  for (let i = 0; i < n; i++) {
+    const [x, y] = offsetXY(cx, cy, off, i);
+    drawSeed(x, y, base + i);
+  }
+}
+
+function drawCount(x, y, n) {
+  if (!n) return;
+  ctx.fillStyle = 'rgba(200,184,152,0.7)';
+  ctx.font = '500 11px "DM Sans", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(n, x, y);
+}
+
+function draw(s) {
+  if (!s) s = readState();
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.save();
+  pill(0, 0, W, H, 18); ctx.clip();
+  ctx.drawImage(wood, 0, 0, W, H);
+  ctx.restore();
+  pill(0, 0, W, H, 18); ctx.strokeStyle = 'rgba(90,65,35,0.5)'; ctx.lineWidth = 2; ctx.stroke();
+
+  for (const p of [0, 1]) {
+    const [x, y] = storeXY(p);
+    const count = p === 0 ? s.p0store : s.p1store;
+    drawHole(x - SW/2, y - SH/2, SW, SH, SR);
+    drawSeeds(x, y, count, STORE_OFF, 70 + p * 10);
+    drawCount(x, y + SH/2 + 16, count);
+  }
+
+  for (let i = 0; i < 6; i++) {
+    const [bx, by] = pitXY(i), [tx, ty] = topPitXY(i);
+
+    if (!gameOver && !animating && s.turn === 0 && s.p0[i] > 0 && hoverPit === i) {
+      circle(bx, by, PIT_R + 2); ctx.fillStyle = 'rgba(224,192,96,0.12)'; ctx.fill();
+    }
+
+    drawHole(bx, by, PIT_R);
+    drawSeeds(bx, by, s.p0[i], PIT_OFF, i * 5);
+    drawCount(bx, by + PIT_R + 16, s.p0[i]);
+
+    drawHole(tx, ty, PIT_R);
+    drawSeeds(tx, ty, s.p1[i], PIT_OFF, 60 + i * 5);
+    drawCount(tx, ty - PIT_R - 8, s.p1[i]);
+  }
+
+  for (const f of flying) drawSeed(f.x, f.y, f.idx);
+}
+
+function easeOut(t) { return 1 - (1 - t) * (1 - t); }
+
+function animate(specs, visState) {
+  if (!specs.length) return Promise.resolve();
+  return new Promise(resolve => {
+    animating = true;
+    const t0 = performance.now();
+    (function tick(now) {
+      flying = [];
+      let done = true;
+      for (const s of specs) {
+        const elapsed = now - t0 - (s.delay || 0);
+        if (elapsed < 0) { done = false; continue; }
+        if (!s.started) { s.started = true; s.onStart?.(); }
+        const t = Math.min(elapsed / s.dur, 1);
+        if (t < 1) done = false;
+        const e = easeOut(t);
+        const arc = Math.min(Math.hypot(s.tx - s.fx, s.ty - s.fy) * .25, 50);
+        flying.push({
+          x: s.fx + (s.tx - s.fx) * e,
+          y: s.fy + (s.ty - s.fy) * e - arc * Math.sin(t * Math.PI),
+          idx: s.idx
+        });
+      }
+      draw(visState);
+      if (done) { flying = []; animating = false; resolve(); }
+      else requestAnimationFrame(tick);
+    })(t0);
+  });
+}
+
+function makeRing(player) {
+  const own = player === 0 ? pitXY : topPitXY;
+  const opp = player === 0 ? topPitXY : pitXY;
+  const xy = [];
+  for (let i = 0; i < 6; i++) xy.push(own(i));     // 0-5: own pits
+  xy.push(storeXY(player));                          // 6: own store
+  for (let i = 0; i < 6; i++) xy.push(opp(i));      // 7-12: opp pits
+  return xy;
+}
+
+function getRingCount(s, player, pos) {
+  const own = player === 0 ? 'p0' : 'p1', opp = player === 0 ? 'p1' : 'p0';
+  if (pos < 6) return s[own][pos];
+  if (pos === 6) return s[own + 'store'];
+  return s[opp][pos - 7];
+}
+
+function incRingCount(s, player, pos) {
+  const own = player === 0 ? 'p0' : 'p1', opp = player === 0 ? 'p1' : 'p0';
+  if (pos < 6) s[own][pos]++;
+  else if (pos === 6) s[own + 'store']++;
+  else s[opp][pos - 7]++;
+}
+
+async function animateSow(before, pit, player) {
+  const pits = player === 0 ? before.p0 : before.p1;
+  const seeds = pits[pit];
+  if (!seeds) return before;
+
+  const ring = makeRing(player);
+  const vis = cloneState(before);
+  if (player === 0) vis.p0[pit] = 0; else vis.p1[pit] = 0;
+
+  let [fx, fy] = ring[pit];
+  let pos = pit;
+
+  for (let n = 0; n < seeds; n++) {
+    pos = (pos + 1) % 13;
+    const [cx, cy] = ring[pos];
+    const off = pos === 6 ? STORE_OFF : PIT_OFF;
+    const count = getRingCount(vis, player, pos);
+    const [lx, ly] = offsetXY(cx, cy, off, count);
+    const remaining = seeds - n;
+
+    const specs = Array.from({length: remaining}, (_, j) => {
+      const a = (j / remaining) * TAU, sp = 4;
+      return {
+        fx: fx + (j > 0 ? Math.cos(a) * sp : 0),
+        fy: fy + (j > 0 ? Math.sin(a) * sp : 0),
+        tx: j === 0 ? lx : cx + Math.cos(a) * sp,
+        ty: j === 0 ? ly : cy + Math.sin(a) * sp,
+        dur: 350, idx: 200 + n * 10 + j
+      };
+    });
+
+    await animate(specs, vis);
+    incRingCount(vis, player, pos);
+    [fx, fy] = [cx, cy];
+    draw(vis);
+  }
+  return vis;
+}
+
+async function animateCapture(visState, afterState, player) {
+  const visPits = player === 0 ? visState.p0 : visState.p1;
+  const afterPits = player === 0 ? afterState.p0 : afterState.p1;
+  const oppPits = player === 0 ? visState.p1 : visState.p0;
+
+  const capturedPit = visPits.findIndex((v, i) => v === 1 && afterPits[i] === 0);
+  if (capturedPit < 0) return;
+
+  const ownXY = player === 0 ? pitXY : topPitXY;
+  const oppXY = player === 0 ? topPitXY : pitXY;
+  const [lx, ly] = ownXY(capturedPit);
+  const [ox, oy] = oppXY(5 - capturedPit);
+  const [sx, sy] = storeXY(player);
+  const storeCount = player === 0 ? visState.p0store : visState.p1store;
+  const oppSeeds = oppPits[5 - capturedPit];
+
+  const vis = cloneState(visState);
+  if (player === 0) { vis.p0[capturedPit] = 0; vis.p1[5 - capturedPit] = 0; }
+  else { vis.p1[capturedPit] = 0; vis.p0[5 - capturedPit] = 0; }
+
+  const [tx0, ty0] = offsetXY(sx, sy, STORE_OFF, storeCount);
+  const specs = [
+    { fx: lx + PIT_OFF[0][0], fy: ly + PIT_OFF[0][1], tx: tx0, ty: ty0, dur: 450, idx: 300 },
+    ...Array.from({length: oppSeeds}, (_, i) => {
+      const off = PIT_OFF[i % PIT_OFF.length];
+      const [tx, ty] = offsetXY(sx, sy, STORE_OFF, storeCount + 1 + i);
+      return { fx: ox + off[0], fy: oy + off[1], tx, ty, dur: 450 + i * 50, idx: 310 + i };
+    })
+  ];
+
+  await animate(specs, vis);
+}
+
+async function animateSweep(before) {
+  const vis = cloneState(before);
+  const specs = [];
+
+  for (let p = 0; p < 2; p++) {
+    const pits = p === 0 ? before.p0 : before.p1;
+    const xyFn = p === 0 ? pitXY : topPitXY;
+    const [sx, sy] = storeXY(p);
+    const baseStore = p === 0 ? before.p0store : before.p1store;
+    let idx = 0;
+
+    for (let pit = 0; pit < 6; pit++) {
+      const [px, py] = xyFn(pit);
+      for (let i = 0; i < pits[pit]; i++) {
+        const n = idx, pt = pit;
+        const [tx, ty] = offsetXY(sx, sy, STORE_OFF, baseStore + n);
+        const key = p === 0 ? 'p0' : 'p1';
+        specs.push({ fx: px, fy: py, tx, ty, dur: 450, delay: n * 80, idx: 400 + p * 100 + n, onStart: () => vis[key][pt]-- });
+        idx++;
+      }
+    }
+  }
+  if (specs.length) await animate(specs, vis);
+}
+
+const $ = id => document.getElementById(id);
+const EVAL_BAR = $('eval-bar'), EVAL_TEXT = $('eval-text');
+const EVAL_NOTIF = $('eval-notification'), EVAL_CONTAINER = $('eval-bar-container');
+const STATUS = $('status'), NEW_GAME_BTN = $('newGame');
+let prevEvalScore = null, notifTimer = null;
+
+function showNotification(text, color) {
+  EVAL_NOTIF.textContent = text;
+  EVAL_NOTIF.style.color = color;
+  EVAL_NOTIF.style.opacity = '1';
+  if (notifTimer) clearTimeout(notifTimer);
+  notifTimer = setTimeout(() => { EVAL_NOTIF.style.opacity = '0'; }, 3000);
+}
+
+function updateEval(score, humanMove) {
+  if (humanMove && prevEvalScore !== null) {
+    const drop = prevEvalScore - score;
+    if (drop >= 5) showNotification('\u2757 Blunder', '#e05555');
+    else if (drop > 0) showNotification('?! Inaccuracy', '#d4a83a');
+  }
+  prevEvalScore = score;
+
+  EVAL_BAR.style.width = Math.max(0, Math.min(100, 50 + (score / 36) * 50)) + '%';
+  EVAL_BAR.style.backgroundColor = score > 0 ? '#c8a44e' : score < 0 ? '#8a3030' : '#888';
+
+  const abs = Math.abs(score);
+  EVAL_TEXT.textContent = score === 0 ? 'The best you could do is draw'
+    : score > 0 ? 'You could win by ' + abs
+    : 'You WILL lose by at least ' + abs + '!';
+}
+
+function setStatus(msg) { STATUS.textContent = msg; }
+
+const painted = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+async function think() {
+  setStatus('Thinking...');
+  await painted();
+  return wasm.solve();
+}
+
+async function doMove(pit, player) {
+  if (animating || gameOver) return;
+
+  const before = readState();
+  const again = wasm.move(pit);
+  if (again < 0) return;
+  const after = readState();
+
+  const postSow = await animateSow(before, pit, player);
+  await animateCapture(postSow, after, player);
+  draw();
+
+  if (again) await new Promise(r => setTimeout(r, 200));
+
+  let s = readState();
+  if (isOver(s)) {
+    const beforeSweep = cloneState(s);
+    s = sweep(s);
+    writeState(s);
+    await animateSweep(beforeSweep);
+    draw();
+    gameOver = true;
+    EVAL_CONTAINER.style.opacity = '0';
+    EVAL_TEXT.style.opacity = '0';
+    EVAL_NOTIF.style.opacity = '0';
+    const diff = s.p0store - s.p1store;
+    setStatus((diff > 0 ? 'You win! ' : diff < 0 ? 'Bot wins. ' : 'Draw! ') + s.p0store + ' - ' + s.p1store);
+    NEW_GAME_BTN.style.display = '';
+    return;
+  }
+
+  await think();
+  const ev = readState();
+  updateEval(ev.score, player === 0);
+
+  if (ev.turn === 1) await botMove();
+  else setStatus(again ? 'Extra turn! Go again.' : 'Your turn. Click a pit.');
+}
+
+async function botMove() {
+  if (gameOver || readState().turn !== 1) return;
+  const bestPit = await think();
+  if (bestPit >= 0) await doMove(bestPit, 1);
+}
+
+function hitTestPit(mx, my) {
+  for (let i = 0; i < 6; i++) {
+    const [px, py] = pitXY(i);
+    if (Math.hypot(mx - px, my - py) < PIT_R) return i;
+  }
+  return -1;
+}
+
+function getMousePos(e) {
+  const rect = cv.getBoundingClientRect();
+  return [(e.clientX - rect.left) * (W / rect.width), (e.clientY - rect.top) * (H / rect.height)];
+}
+
+cv.addEventListener('mousemove', (e) => {
+  const [mx, my] = getMousePos(e);
+  const old = hoverPit;
+  hoverPit = hitTestPit(mx, my);
+  const s = readState();
+  const playable = !gameOver && !animating && s.turn === 0 && hoverPit >= 0 && s.p0[hoverPit] > 0;
+  cv.style.cursor = playable ? 'pointer' : 'default';
+  if (!playable) hoverPit = -1;
+  if (hoverPit !== old) draw();
+});
+
+cv.addEventListener('click', async (e) => {
+  if (busy || animating || gameOver) return;
+  const s = readState();
+  if (s.turn !== 0) return;
+  const [mx, my] = getMousePos(e);
+  const pit = hitTestPit(mx, my);
+  if (pit >= 0 && s.p0[pit] > 0) {
+    busy = true;
+    try { await doMove(pit, 0); }
+    finally { busy = false; }
+  }
+});
+
+async function startGame(clearTT) {
+  statePtr = wasm.init(clearTT ? 1 : 0);
+  gameOver = false;
+  busy = false;
+  hoverPit = -1;
+  prevEvalScore = null;
+  NEW_GAME_BTN.style.display = 'none';
+  EVAL_CONTAINER.style.opacity = '1';
+  EVAL_TEXT.style.opacity = '1';
+  EVAL_NOTIF.style.opacity = '0';
+  draw();
+  await think();
+  const s = readState();
+  updateEval(s.score, false);
+  setStatus('Your turn. Click a pit.');
+}
+
+NEW_GAME_BTN.addEventListener('click', () => startGame(false));
+
+(async () => {
+  try {
+    const resp = await fetch('build/mancala.wasm');
+    const { instance } = await WebAssembly.instantiate(await resp.arrayBuffer(), {
+      env: { memory: new WebAssembly.Memory({ initial: 256 }) }
+    });
+    wasm = instance.exports;
+    mem = wasm.memory;
+    await startGame(true);
+  } catch (e) {
+    setStatus('Failed to load WASM: ' + e.message);
+    console.error(e);
+  }
+})();
+
+</script>
+</body>
+</html>
